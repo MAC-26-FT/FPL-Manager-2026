@@ -1,0 +1,81 @@
+name: Update FPL data
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 * * * *"
+  push:
+    paths:
+      - ".github/workflows/update-fpl-data.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Fetch official FPL public data
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p data
+
+          curl -fsSL --retry 3 --connect-timeout 20 \
+            "https://fantasy.premierleague.com/api/bootstrap-static/" \
+            -o /tmp/bootstrap.json
+
+          curl -fsSL --retry 3 --connect-timeout 20 \
+            "https://fantasy.premierleague.com/api/fixtures/" \
+            -o /tmp/fixtures.json
+
+          python - <<'PY'
+          import json
+          import datetime
+
+          b = json.load(open('/tmp/bootstrap.json'))
+          f = json.load(open('/tmp/fixtures.json'))
+
+          events = b.get('events', [])
+
+          gw = next(
+              (x for x in events if x.get('is_current')),
+              next(
+                  (x for x in events if x.get('is_next')),
+                  events[0] if events else {'id': 0}
+              )
+          )
+
+          out = {
+              'updated_at': datetime.datetime.now(
+                  datetime.timezone.utc
+              ).isoformat(),
+              'gameweek': gw.get('id', 0),
+              'bootstrap': b,
+              'fixtures': f
+          }
+
+          json.dump(
+              out,
+              open('data/fpl.json', 'w'),
+              separators=(',', ':')
+          )
+          PY
+
+      - name: Commit cache
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add data/fpl.json
+
+          git diff --cached --quiet && exit 0
+
+          git commit -m "Update FPL data cache"
+
+          git push
